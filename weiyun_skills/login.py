@@ -260,7 +260,6 @@ def qrcode_login(save_path: str = DEFAULT_COOKIES_PATH) -> dict:
                 return build_response(True, data={
                     "uin": all_cookies.get("uin", ""),
                     "nickname": "",
-                    "cookies_str": cookies_str,
                     "save_path": save_path,
                 })
 

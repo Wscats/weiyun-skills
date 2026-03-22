@@ -7,11 +7,22 @@ __pycache__/
 # Cookies (contains sensitive login credentials)
 cookies.json
 
+# Test/debug scripts (may print sensitive cookie values)
+test_*.py
+
+# Test output files
+test_*.txt
+test_*.json
+test_result.json
+test_format_results.json
+
+# QR code images (generated during login)
+weiyun_qrcode*.png
+
 # JavaScript webpack bundles (not needed for Python SDK)
 *_bundle.js
 *_chunk.js
 manifest.js
 
-# Test output files
-test_*.txt
-test_result.json
+# Upload test files
+upload_file/
