@@ -6,3 +6,12 @@ __pycache__/
 
 # Cookies (contains sensitive login credentials)
 cookies.json
+
+# JavaScript webpack bundles (not needed for Python SDK)
+*_bundle.js
+*_chunk.js
+manifest.js
+
+# Test output files
+test_*.txt
+test_result.json
