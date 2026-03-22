@@ -1,0 +1,8 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Cookies (contains sensitive login credentials)
+cookies.json

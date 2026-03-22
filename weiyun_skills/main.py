@@ -87,6 +87,41 @@ def cmd_download(client: WeiyunClient, args) -> None:
         print(f"[✗] Download failed: {result['message']}")
 
 
+def cmd_download_folder(client: WeiyunClient, args) -> None:
+    """Handle 'download-folder' command."""
+    as_zip = getattr(args, "zip", False)
+    mode = "zip" if as_zip else "recursive"
+    print(f"[*] Downloading folder '{args.folder}' -> {args.local} (mode: {mode})")
+    result = client.download_folder(
+        args.folder, args.local,
+        overwrite=getattr(args, "overwrite", False),
+        as_zip=as_zip,
+    )
+    if result["success"]:
+        d = result["data"]
+        if as_zip:
+            print(f"[✓] Downloaded zip: {d['local_path']}")
+            print(f"    Size: {d.get('size_str', format_size(d.get('size', 0)))}")
+            print(f"    MD5:  {d['md5']}")
+            print(f"    Time: {d['elapsed']}s")
+        else:
+            print(f"[✓] Downloaded folder: {d['local_path']}")
+            print(f"    Files:  {d['downloaded_count']} downloaded, "
+                  f"{d['failed_count']} failed")
+            print(f"    Size:   {d['total_size_str']}")
+            print(f"    Time:   {d['elapsed']}s")
+            if d["downloaded_files"]:
+                print("\n    Downloaded files:")
+                for f in d["downloaded_files"]:
+                    print(f"      📄 {f['name']} ({f['size_str']})")
+            if d["failed_files"]:
+                print("\n    Failed files:")
+                for f in d["failed_files"]:
+                    print(f"      ❌ {f['name']}: {f['error']}")
+    else:
+        print(f"[✗] Download failed: {result['message']}")
+
+
 def cmd_delete(client: WeiyunClient, args) -> None:
     """Handle 'delete' command."""
     permanent = getattr(args, "permanent", False)
@@ -336,6 +371,17 @@ Examples:
     p_download.add_argument("local", help="Local save path")
     p_download.add_argument("--overwrite", action="store_true")
 
+    # download-folder
+    p_dl_folder = subparsers.add_parser("download-folder",
+                                         help="Download a folder")
+    p_dl_folder.add_argument("folder", help="Folder name on Weiyun")
+    p_dl_folder.add_argument("local", help="Local save directory")
+    p_dl_folder.add_argument("--overwrite", action="store_true",
+                              help="Overwrite existing local files")
+    p_dl_folder.add_argument("--zip", action="store_true",
+                              help="Download as zip file instead of "
+                                   "individual files")
+
     # delete
     p_delete = subparsers.add_parser("delete", help="Delete a file")
     p_delete.add_argument("path", help="File path to delete")
@@ -415,6 +461,7 @@ Examples:
         "list": cmd_list,
         "upload": cmd_upload,
         "download": cmd_download,
+        "download-folder": cmd_download_folder,
         "delete": cmd_delete,
         "move": cmd_move,
         "copy": cmd_copy,
