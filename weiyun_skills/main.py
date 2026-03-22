@@ -71,6 +71,34 @@ def cmd_upload(client: WeiyunClient, args) -> None:
         print(f"[✗] Upload failed: {result['message']}")
 
 
+def cmd_upload_folder(client: WeiyunClient, args) -> None:
+    """Handle 'upload-folder' command."""
+    remote = getattr(args, "remote", "/")
+    print(f"[*] Uploading folder '{args.local}' -> Weiyun:{remote}")
+    result = client.upload_folder(
+        args.local, remote,
+        overwrite=getattr(args, "overwrite", False)
+    )
+    if result["success"]:
+        d = result["data"]
+        print(f"[✓] Uploaded folder: {d['folder_name']}")
+        print(f"    Files:  {d['uploaded_count']} uploaded, "
+              f"{d['failed_count']} failed")
+        print(f"    Size:   {d['total_size_str']}")
+        print(f"    Time:   {d['elapsed']}s")
+        if d["uploaded_files"]:
+            print("\n    Uploaded files:")
+            for f in d["uploaded_files"]:
+                instant = " ⚡" if f.get("instant_upload") else ""
+                print(f"      📄 {f['name']} ({f['size_str']}){instant}")
+        if d["failed_files"]:
+            print("\n    Failed files:")
+            for f in d["failed_files"]:
+                print(f"      ❌ {f['name']}: {f['error']}")
+    else:
+        print(f"[✗] Upload failed: {result['message']}")
+
+
 def cmd_download(client: WeiyunClient, args) -> None:
     """Handle 'download' command."""
     print(f"[*] Downloading {args.remote} -> {args.local}")
@@ -365,6 +393,15 @@ Examples:
     p_upload.add_argument("remote", help="Remote target path")
     p_upload.add_argument("--overwrite", action="store_true")
 
+    # upload-folder
+    p_ul_folder = subparsers.add_parser("upload-folder",
+                                         help="Upload a folder")
+    p_ul_folder.add_argument("local", help="Local folder path")
+    p_ul_folder.add_argument("remote", nargs="?", default="/",
+                              help="Remote target path (default: root)")
+    p_ul_folder.add_argument("--overwrite", action="store_true",
+                              help="Overwrite existing files on Weiyun")
+
     # download
     p_download = subparsers.add_parser("download", help="Download a file")
     p_download.add_argument("remote", help="Remote file path")
@@ -460,6 +497,7 @@ Examples:
     commands = {
         "list": cmd_list,
         "upload": cmd_upload,
+        "upload-folder": cmd_upload_folder,
         "download": cmd_download,
         "download-folder": cmd_download_folder,
         "delete": cmd_delete,

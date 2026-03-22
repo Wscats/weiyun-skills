@@ -404,9 +404,9 @@ class WeiyunClient:
                     overwrite: bool = False) -> dict:
         """Upload a local file to Weiyun.
 
-        Uses the real Weiyun upload API:
-        1. PreUpload (cmd=247120) - send file metadata, check for instant upload
-        2. Upload Piece (cmd=247121) - upload actual file data
+        Uses the real Weiyun upload API via FormData:
+        1. PreUpload (cmd=247120) - send file metadata + blob
+        2. UploadPiece (cmd=247121) - continue upload if needed
 
         Args:
             local_path: Path to local file.
@@ -421,17 +421,317 @@ class WeiyunClient:
                                   message=f"Local file not found: {local_path}",
                                   error_code="FILE_NOT_FOUND")
 
-        # Warm session first
-        self._warm_session()
-
-        file_size = os.path.getsize(local_path)
         file_name = os.path.basename(remote_path) or os.path.basename(local_path)
-        file_md5 = get_file_md5(local_path)
-        file_sha = self._get_file_sha1(local_path)
 
         # Get root dir key for upload target
         root_key = self._get_root_dir_key()
         main_dir_key = getattr(self, "_main_dir_key", root_key)
+
+        result = self._do_upload(
+            local_path=local_path,
+            ppdir_key=root_key,
+            pdir_key=main_dir_key,
+            file_name=file_name,
+            overwrite=overwrite,
+        )
+
+        if result["success"]:
+            result["data"]["remote_path"] = remote_path
+
+        return result
+
+    def _do_upload(self, local_path: str, ppdir_key: str,
+                   pdir_key: str, file_name: str,
+                   overwrite: bool = False) -> dict:
+        """Core upload logic using FormData via upload.weiyun.com.
+
+        Matches the Weiyun JS SDK upload flow for QQ accounts:
+        1. PreUpload (cmd=247120) via FormData - sends file metadata + blob
+        2. If not instant upload, continue with UploadPiece (cmd=247121)
+
+        Args:
+            local_path: Path to local file.
+            ppdir_key: Grandparent directory key.
+            pdir_key: Target parent directory key.
+            file_name: File name on Weiyun.
+            overwrite: Whether to overwrite existing file.
+
+        Returns:
+            Response dict with upload result.
+        """
+        if not os.path.isfile(local_path):
+            return build_response(False,
+                                  message=f"Local file not found: {local_path}",
+                                  error_code="FILE_NOT_FOUND")
+
+        self._warm_session()
+
+        file_size = os.path.getsize(local_path)
+        file_md5 = get_file_md5(local_path)
+        file_sha = self._get_file_sha1(local_path)
+
+        # Build request header (non-preUpload style per JS SDK)
+        req_header = {
+            "cmd": 247120,
+            "appid": 30013,
+            "version": 0,
+            "major_version": 3,
+            "minor_version": 0,
+            "fix_version": 0,
+            "user_flag": 0,
+        }
+
+        # Build request body (key without leading dot per JS SDK)
+        req_body = {
+            "ReqMsg_body": {
+                "ext_req_head": {
+                    "token_info": self._get_token_info(),
+                    "language_info": {"language_type": 2052},
+                },
+                "weiyun.PreUploadMsgReq_body": {
+                    "req": {
+                        "common_upload_req": {
+                            "ppdir_key": ppdir_key,
+                            "pdir_key": pdir_key,
+                            "file_size": file_size,
+                            "filename": file_name,
+                            "file_exist_option": 6 if overwrite else 0,
+                            "use_mutil_channel": True,
+                            "file_sha": file_sha,
+                            "file_md5": file_md5,
+                        },
+                        "upload_scr": 0,
+                    },
+                },
+            },
+        }
+
+        # PreUpload via FormData (same as JS SDK uploadRequest)
+        upload_url = "https://upload.weiyun.com/ftnup_v2/weiyun?cmd=247120"
+        json_payload = json.dumps({
+            "req_header": req_header,
+            "req_body": req_body,
+        })
+
+        try:
+            with open(local_path, "rb") as f:
+                files = {
+                    "json": (None, json_payload, "application/json"),
+                    "upload": (file_name, f, "application/octet-stream"),
+                }
+                pre_resp = self.session.post(
+                    upload_url, files=files, timeout=300,
+                )
+            pre_data = pre_resp.json()
+        except requests.RequestException as e:
+            return build_response(False, message=f"PreUpload failed: {e}",
+                                  error_code="NETWORK_ERROR")
+        except json.JSONDecodeError as e:
+            return build_response(False,
+                                  message=f"PreUpload invalid response: {e}",
+                                  error_code="API_ERROR")
+
+        # Check response header
+        rsp_header = pre_data.get("rsp_header", {})
+        retcode = rsp_header.get("retcode", -1)
+        if retcode != 0:
+            return build_response(
+                False,
+                message=rsp_header.get("retmsg",
+                                       f"PreUpload error (retcode={retcode})"),
+                error_code="API_ERROR",
+            )
+
+        rsp_body = pre_data.get("rsp_body", {})
+        rsp_msg = rsp_body.get("RspMsg_body", rsp_body)
+        pre_result = rsp_msg.get("weiyun.PreUploadMsgRsp_body",
+                                  rsp_msg.get(".weiyun.PreUploadMsgRsp_body",
+                                              rsp_msg))
+
+        file_exist = pre_result.get("file_exist", False)
+        common_rsp = pre_result.get("common_upload_rsp",
+                                     pre_result.get("rsp", {}))
+        if isinstance(common_rsp, dict) and "common_upload_rsp" in common_rsp:
+            common_rsp = common_rsp["common_upload_rsp"]
+
+        file_id = common_rsp.get("file_id", "")
+        upload_filename = common_rsp.get("filename", file_name)
+
+        # Instant upload (sec upload) — server already has the file
+        if file_exist:
+            return build_response(True, data={
+                "file_id": file_id,
+                "name": upload_filename,
+                "size": file_size,
+                "md5": file_md5,
+                "uploaded_at": get_timestamp(),
+                "instant_upload": True,
+            })
+
+        # Step 2: Upload file data if needed (flow_state check)
+        flow_state = pre_result.get("flow_state", 0)
+        channel = common_rsp.get("channel", {})
+
+        if flow_state == 1 or not channel:
+            # Upload completed in preUpload step (small file or sec upload)
+            return build_response(True, data={
+                "file_id": file_id,
+                "name": upload_filename,
+                "size": file_size,
+                "md5": file_md5,
+                "uploaded_at": get_timestamp(),
+                "instant_upload": False,
+            })
+
+        # Continue with UploadPiece for larger files
+        piece_header = {
+            "cmd": 247121,
+            "appid": 30013,
+            "version": 0,
+            "major_version": 3,
+            "minor_version": 0,
+            "fix_version": 0,
+            "user_flag": 0,
+        }
+
+        piece_body = {
+            "ReqMsg_body": {
+                "weiyun.UploadPieceMsgReq_body": {
+                    "req": channel,
+                },
+            },
+        }
+
+        piece_json = json.dumps({
+            "req_header": piece_header,
+            "req_body": piece_body,
+        })
+
+        piece_url = "https://upload.weiyun.com/ftnup_v2/weiyun?cmd=247121"
+
+        try:
+            with open(local_path, "rb") as f:
+                files = {
+                    "json": (None, piece_json, "application/json"),
+                    "upload": (file_name, f, "application/octet-stream"),
+                }
+                piece_resp = self.session.post(
+                    piece_url, files=files, timeout=300,
+                )
+
+            if piece_resp.status_code != 200:
+                # Fallback to backup URL
+                with open(local_path, "rb") as f:
+                    files = {
+                        "json": (None, piece_json, "application/json"),
+                        "upload": (file_name, f, "application/octet-stream"),
+                    }
+                    piece_resp = self.session.post(
+                        f"{API_BASE}/ftnup_v2/weiyun?cmd=247121",
+                        files=files,
+                        timeout=300,
+                    )
+
+            try:
+                piece_data = piece_resp.json()
+                p_rsp = piece_data.get("rsp_header", {})
+                p_retcode = p_rsp.get("retcode", 0)
+                if p_retcode != 0:
+                    return build_response(
+                        False,
+                        message=f"Upload failed: {p_rsp.get('retmsg', f'retcode={p_retcode}')}",
+                        error_code="API_ERROR",
+                    )
+            except (json.JSONDecodeError, ValueError):
+                if piece_resp.status_code != 200:
+                    return build_response(
+                        False,
+                        message=f"Upload failed: HTTP {piece_resp.status_code}",
+                        error_code="NETWORK_ERROR",
+                    )
+        except requests.RequestException as e:
+            return build_response(False, message=f"Upload error: {e}",
+                                  error_code="NETWORK_ERROR")
+
+        return build_response(True, data={
+            "file_id": file_id,
+            "name": upload_filename,
+            "size": file_size,
+            "md5": file_md5,
+            "uploaded_at": get_timestamp(),
+            "instant_upload": False,
+        })
+
+    def _find_or_create_folder(self, parent_dir_key: str,
+                               folder_name: str) -> dict:
+        """Find an existing folder by name under a parent dir, or create it.
+
+        Args:
+            parent_dir_key: Parent directory key.
+            folder_name: Folder name to find or create.
+
+        Returns:
+            Response dict with folder dir_key in data.
+        """
+        # List the parent directory to look for the folder
+        list_result = self.list_files(parent_dir_key)
+        if not list_result["success"]:
+            return list_result
+
+        for item in list_result["data"]["files"]:
+            if item["type"] == "folder" and item["name"] == folder_name:
+                return build_response(True, data={
+                    "dir_key": item["file_id"],
+                    "dir_name": folder_name,
+                    "created": False,
+                })
+
+        # Folder not found, create it
+        root_key = self._get_root_dir_key()
+        body = {
+            "ppdir_key": root_key,
+            "pdir_key": parent_dir_key,
+            "dir_name": folder_name,
+        }
+        result = self._api_request("DiskDirCreate", body)
+        if not result["success"]:
+            return result
+
+        new_dir_key = result["data"].get("dir_key", "")
+        return build_response(True, data={
+            "dir_key": new_dir_key,
+            "dir_name": folder_name,
+            "created": True,
+        })
+
+    def _upload_file_to_dir(self, local_path: str, pdir_key: str,
+                            ppdir_key: str, file_name: str,
+                            overwrite: bool = False) -> dict:
+        """Upload a single file to a specific directory by dir_key.
+
+        Uses the same PreUpload + UploadPiece flow as upload_file,
+        but targets a specific parent directory.
+
+        Args:
+            local_path: Path to local file.
+            pdir_key: Target parent directory key.
+            ppdir_key: Grandparent directory key.
+            file_name: File name on Weiyun.
+            overwrite: Whether to overwrite existing file.
+
+        Returns:
+            Response dict with upload result.
+        """
+        if not os.path.isfile(local_path):
+            return build_response(False,
+                                  message=f"Local file not found: {local_path}",
+                                  error_code="FILE_NOT_FOUND")
+
+        self._warm_session()
+
+        file_size = os.path.getsize(local_path)
+        file_md5 = get_file_md5(local_path)
+        file_sha = self._get_file_sha1(local_path)
 
         g_tk = self._get_gtk()
         uin = self._get_uin()
@@ -461,8 +761,8 @@ class WeiyunClient:
                 ".weiyun.PreUploadMsgReq_body": {
                     "req": {
                         "common_upload_req": {
-                            "ppdir_key": root_key,
-                            "pdir_key": main_dir_key,
+                            "ppdir_key": ppdir_key,
+                            "pdir_key": pdir_key,
                             "file_size": file_size,
                             "filename": file_name,
                             "file_exist_option": 6 if overwrite else 0,
@@ -477,8 +777,8 @@ class WeiyunClient:
         }
 
         pre_upload_data = {
-            "req_header": json.dumps(pre_upload_header),
-            "req_body": json.dumps(pre_upload_body),
+            "req_header": pre_upload_header,
+            "req_body": pre_upload_body,
         }
 
         try:
@@ -498,11 +798,12 @@ class WeiyunClient:
                                   message=f"PreUpload invalid response: {e}",
                                   error_code="API_ERROR")
 
-        # Check for errors
-        if "ret" in pre_data and pre_data["ret"] != 0:
+        err_code = pre_data.get("retcode", pre_data.get("ret"))
+        if err_code is not None and err_code != 0:
             return build_response(
                 False,
-                message=pre_data.get("msg", f"PreUpload error (ret={pre_data['ret']})"),
+                message=pre_data.get("msg",
+                                     f"PreUpload error (code={err_code})"),
                 error_code="API_ERROR",
             )
 
@@ -510,8 +811,7 @@ class WeiyunClient:
         rsp_body = resp_data.get("rsp_body", {})
         rsp_msg = rsp_body.get("RspMsg_body", {})
         pre_result = rsp_msg.get(
-            ".weiyun.PreUploadMsgRsp_body",
-            rsp_msg,
+            ".weiyun.PreUploadMsgRsp_body", rsp_msg,
         )
 
         file_exist = pre_result.get("file_exist", False)
@@ -523,20 +823,18 @@ class WeiyunClient:
         file_id = common_rsp.get("file_id", "")
         upload_filename = common_rsp.get("filename", file_name)
 
-        # If file already exists (instant upload / sec upload), done!
+        # Instant upload (sec upload) — file already exists on server
         if file_exist:
             return build_response(True, data={
                 "file_id": file_id,
                 "name": upload_filename,
                 "size": file_size,
-                "remote_path": remote_path,
                 "md5": file_md5,
                 "uploaded_at": get_timestamp(),
                 "instant_upload": True,
             })
 
         # Step 2: Upload file data
-        # Get channel info from preUpload response
         channel = common_rsp.get("channel", {})
         upload_url = (
             f"https://upload.weiyun.com/ftnup_v2/weiyun?cmd=247121"
@@ -578,7 +876,6 @@ class WeiyunClient:
                 )
 
             if upload_resp.status_code != 200:
-                # Fallback to backup URL
                 with open(local_path, "rb") as f:
                     files = {
                         "json": (None, upload_json_str, "application/json"),
@@ -590,28 +887,201 @@ class WeiyunClient:
                         timeout=300,
                     )
 
-            upload_data = upload_resp.json()
             if upload_resp.status_code != 200:
                 return build_response(
                     False,
                     message=f"Upload failed: HTTP {upload_resp.status_code}",
                     error_code="NETWORK_ERROR",
                 )
+            # Check upload response retcode
+            try:
+                up_data = upload_resp.json()
+                up_rsp_header = up_data.get("rsp_header", {})
+                up_retcode = up_rsp_header.get("retcode", 0)
+                if up_retcode != 0:
+                    return build_response(
+                        False,
+                        message=f"Upload failed: {up_rsp_header.get('retmsg', f'retcode={up_retcode}')}",
+                        error_code="API_ERROR",
+                    )
+            except (json.JSONDecodeError, ValueError):
+                pass  # Non-JSON response with HTTP 200 is ok
         except requests.RequestException as e:
             return build_response(False, message=f"Upload error: {e}",
                                   error_code="NETWORK_ERROR")
-        except json.JSONDecodeError:
-            # Upload may return non-JSON on success
-            pass
 
         return build_response(True, data={
             "file_id": file_id,
             "name": upload_filename,
             "size": file_size,
-            "remote_path": remote_path,
             "md5": file_md5,
             "uploaded_at": get_timestamp(),
             "instant_upload": False,
+        })
+
+    def upload_folder(self, local_path: str, remote_path: str = "/",
+                      overwrite: bool = False) -> dict:
+        """Upload a local folder to Weiyun, preserving directory structure.
+
+        Recursively traverses the local folder and uploads all files,
+        creating corresponding folders on Weiyun as needed.
+
+        Args:
+            local_path: Path to local folder.
+            remote_path: Target path on Weiyun ('/' for root, or a
+                         folder name under root).
+            overwrite: Whether to overwrite existing files.
+
+        Returns:
+            Response dict with upload summary.
+        """
+        if not os.path.isdir(local_path):
+            return build_response(
+                False,
+                message=f"Local folder not found: {local_path}",
+                error_code="FOLDER_NOT_FOUND")
+
+        root_key = self._get_root_dir_key()
+        main_dir_key = getattr(self, "_main_dir_key", root_key)
+
+        folder_name = os.path.basename(os.path.normpath(local_path))
+
+        # Determine the parent dir key where we create the folder
+        if remote_path == "/" or remote_path == main_dir_key:
+            parent_dir_key = main_dir_key
+            ppdir_key = root_key
+        else:
+            # remote_path is a folder name — find it
+            list_result = self.list_files(main_dir_key)
+            if not list_result["success"]:
+                return list_result
+            target = None
+            for item in list_result["data"]["files"]:
+                if item["type"] == "folder" and item["name"] == remote_path:
+                    target = item
+                    break
+            if target:
+                parent_dir_key = target["file_id"]
+                ppdir_key = main_dir_key
+            else:
+                parent_dir_key = main_dir_key
+                ppdir_key = root_key
+
+        # Create the top-level folder on Weiyun
+        folder_result = self._find_or_create_folder(parent_dir_key,
+                                                     folder_name)
+        if not folder_result["success"]:
+            return folder_result
+
+        target_dir_key = folder_result["data"]["dir_key"]
+
+        start_time = time.time()
+        # Recursively upload
+        result = self._upload_folder_recursive(
+            local_path=local_path,
+            pdir_key=target_dir_key,
+            ppdir_key=parent_dir_key,
+            overwrite=overwrite,
+        )
+
+        elapsed = round(time.time() - start_time, 2)
+        if result["success"]:
+            result["data"]["folder_name"] = folder_name
+            result["data"]["elapsed"] = elapsed
+        return result
+
+    def _upload_folder_recursive(self, local_path: str, pdir_key: str,
+                                 ppdir_key: str,
+                                 overwrite: bool = False) -> dict:
+        """Recursively upload folder contents.
+
+        Args:
+            local_path: Local folder path.
+            pdir_key: Target directory key on Weiyun.
+            ppdir_key: Parent of target directory key.
+            overwrite: Whether to overwrite existing files.
+
+        Returns:
+            Response dict with upload summary.
+        """
+        uploaded_files = []
+        failed_files = []
+        total_size = 0
+
+        try:
+            entries = sorted(os.listdir(local_path))
+        except OSError as e:
+            return build_response(False,
+                                  message=f"Cannot read directory: {e}",
+                                  error_code="IO_ERROR")
+
+        for entry in entries:
+            full_path = os.path.join(local_path, entry)
+
+            # Skip hidden files and common cache directories
+            if entry.startswith(".") or entry == "__pycache__":
+                continue
+
+            if os.path.isdir(full_path):
+                # Create subfolder on Weiyun and recurse
+                sub_result = self._find_or_create_folder(pdir_key, entry)
+                if not sub_result["success"]:
+                    failed_files.append({
+                        "name": entry + "/",
+                        "error": sub_result["message"],
+                    })
+                    continue
+
+                sub_dir_key = sub_result["data"]["dir_key"]
+                recurse_result = self._upload_folder_recursive(
+                    local_path=full_path,
+                    pdir_key=sub_dir_key,
+                    ppdir_key=pdir_key,
+                    overwrite=overwrite,
+                )
+                if recurse_result["success"]:
+                    uploaded_files.extend(
+                        recurse_result["data"].get("uploaded_files", []))
+                    failed_files.extend(
+                        recurse_result["data"].get("failed_files", []))
+                    total_size += recurse_result["data"].get("total_size", 0)
+                else:
+                    failed_files.append({
+                        "name": entry + "/",
+                        "error": recurse_result["message"],
+                    })
+
+            elif os.path.isfile(full_path):
+                result = self._do_upload(
+                    local_path=full_path,
+                    ppdir_key=ppdir_key,
+                    pdir_key=pdir_key,
+                    file_name=entry,
+                    overwrite=overwrite,
+                )
+                if result["success"]:
+                    file_size = result["data"].get("size", 0)
+                    uploaded_files.append({
+                        "name": result["data"].get("name", entry),
+                        "size": file_size,
+                        "size_str": format_size(file_size),
+                        "instant_upload": result["data"].get(
+                            "instant_upload", False),
+                    })
+                    total_size += file_size
+                else:
+                    failed_files.append({
+                        "name": entry,
+                        "error": result["message"],
+                    })
+
+        return build_response(True, data={
+            "uploaded_files": uploaded_files,
+            "failed_files": failed_files,
+            "uploaded_count": len(uploaded_files),
+            "failed_count": len(failed_files),
+            "total_size": total_size,
+            "total_size_str": format_size(total_size),
         })
 
     def _download_single_file(self, file_id: str, pdir_key: str,

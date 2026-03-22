@@ -1,0 +1,6 @@
+Waiting 30s for rate limit cooldown...
+Result written to test_result.json
+{
+  "retcode": 50000,
+  "msg": "服务繁忙"
+}

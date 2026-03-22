@@ -1,0 +1,36 @@
+[22:47:40] Waiting 5 minutes for rate limit cooldown...
+[22:52:40] Starting upload test...
+
+=== Test 1: upload_file ===
+{
+  "success": false,
+  "data": null,
+  "message": "(190034)解析json协议失败",
+  "error_code": "API_ERROR"
+}
+
+=== Test 2: upload_folder ===
+{
+  "success": true,
+  "data": {
+    "uploaded_files": [],
+    "failed_files": [
+      {
+        "name": "abc.txt",
+        "error": "(190034)解析json协议失败"
+      }
+    ],
+    "uploaded_count": 0,
+    "failed_count": 1,
+    "total_size": 0,
+    "total_size_str": "0 B",
+    "folder_name": "upload_file",
+    "elapsed": 0.05
+  },
+  "message": "ok"
+}
+
+=== Test 3: Verify ===
+Found: upload_file (type=folder)
+
+[22:52:42] Done!
