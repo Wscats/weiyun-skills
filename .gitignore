@@ -1,28 +1,46 @@
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyo
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
 
-# Cookies (contains sensitive login credentials)
-cookies.json
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.vuepress/dist
 
-# Test/debug scripts (may print sensitive cookie values)
-test_*.py
+# Cache
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
 
-# Test output files
-test_*.txt
-test_*.json
-test_result.json
-test_format_results.json
+# Environment
+.env
+.env.local
+.env.*.local
 
-# QR code images (generated during login)
-weiyun_qrcode*.png
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
-# JavaScript webpack bundles (not needed for Python SDK)
-*_bundle.js
-*_chunk.js
-manifest.js
+# OS
+.DS_Store
+Thumbs.db
 
-# Upload test files
-upload_file/
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# TypeScript
+*.tsbuildinfo
+
+# Coverage
+coverage/
+.nyc_output/
