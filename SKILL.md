@@ -2,7 +2,7 @@
 name: weiyun-management
 license: MIT
 metadata:
-  version: 1.0.5
+  version: 1.0.6
   source: https://github.com/enoyao/weiyun-skills
   homepage: https://github.com/enoyao/weiyun-skills
   install:
