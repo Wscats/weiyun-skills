@@ -2,5 +2,5 @@
 
 from weiyun_skills.client import WeiyunClient
 
-__version__ = "1.0.0"
+__version__ = "1.0.4"
 __all__ = ["WeiyunClient"]

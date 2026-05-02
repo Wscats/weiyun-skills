@@ -1,6 +1,8 @@
 """Weiyun login module - supports QR code login and cookies login."""
 
 import io
+import os
+import stat
 import json
 import time
 import argparse
@@ -28,15 +30,47 @@ DEFAULT_COOKIES_PATH = "cookies.json"
 
 
 def _save_cookies(cookies_data: dict, save_path: str) -> None:
-    """Save cookies data to a JSON file.
+    """Save cookies data to a JSON file with strict permissions.
+
+    The cookies file grants broad access to the user's Weiyun account,
+    so we write it with mode 0600 (owner read/write only) to prevent
+    other local users from reading the credentials.
 
     Args:
         cookies_data: Cookies data to save.
         save_path: File path to save cookies.
     """
     cookies_data["update_time"] = get_timestamp()
-    with open(save_path, "w", encoding="utf-8") as f:
+
+    # Create/truncate the file with 0600 permissions atomically where possible.
+    # os.open lets us pass mode bits that honor the umask-stripped 0600 value.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    try:
+        fd = os.open(save_path, flags, 0o600)
+    except OSError:
+        # Fallback: use regular open, then try to chmod afterwards.
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump(cookies_data, f, ensure_ascii=False, indent=2)
+        try:
+            os.chmod(save_path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+        return
+
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(cookies_data, f, ensure_ascii=False, indent=2)
+
+    # Ensure permissions are tight even if the file already existed.
+    try:
+        os.chmod(save_path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+
+    print(
+        f"[!] Cookies saved to {save_path} (mode 0600). This file grants "
+        f"full access to the Weiyun account — keep it private and delete it "
+        f"when no longer needed."
+    )
 
 
 def load_cookies(save_path: str = DEFAULT_COOKIES_PATH) -> dict:
@@ -361,6 +395,15 @@ def main():
         help=f"Path to save cookies file (default: {DEFAULT_COOKIES_PATH})"
     )
     args = parser.parse_args()
+
+    # Security notice: make it explicit that this tool persists a
+    # high-privilege credential to disk.
+    print(
+        "[SECURITY] Weiyun login cookies authorize broad access to your "
+        "cloud storage. Only proceed if you trust this environment, "
+        "prefer a non-primary account, and delete the saved cookies when "
+        "you are done."
+    )
 
     if args.method == "qrcode":
         result = qrcode_login(save_path=args.save_path)

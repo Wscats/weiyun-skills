@@ -13,6 +13,32 @@ except ImportError:
     tabulate = None
 
 
+def _confirm(prompt: str, assume_yes: bool = False) -> bool:
+    """Ask the user to confirm a destructive/irreversible action.
+
+    Returns True only when the user explicitly types 'y' / 'yes' (case
+    insensitive). If stdin is not a TTY (e.g. running inside an automated
+    agent pipeline) the prompt is refused unless ``assume_yes`` is set via
+    an explicit ``--yes`` flag, so an agent cannot silently approve
+    destructive operations on the user's behalf.
+    """
+    if assume_yes:
+        return True
+    # If we cannot interactively prompt the user, fail closed.
+    if not sys.stdin or not sys.stdin.isatty():
+        print(
+            "[!] Refusing to run a destructive action without an interactive "
+            "confirmation. Re-run in a terminal, or pass --yes if you have "
+            "manually verified the operation."
+        )
+        return False
+    try:
+        answer = input(f"{prompt} [y/N]: ").strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
 def _print_json(data: dict) -> None:
     """Pretty print JSON data."""
     print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -153,7 +179,31 @@ def cmd_download_folder(client: WeiyunClient, args) -> None:
 def cmd_delete(client: WeiyunClient, args) -> None:
     """Handle 'delete' command."""
     permanent = getattr(args, "permanent", False)
+    assume_yes = getattr(args, "yes", False)
     action = "Permanently deleting" if permanent else "Deleting"
+
+    # Require explicit user confirmation before any remote deletion.
+    # Permanent delete skips the recycle bin and is effectively irreversible,
+    # so it uses a stricter prompt that spells out the consequences.
+    if permanent:
+        print(
+            f"[!] PERMANENT DELETE requested for: {args.path}\n"
+            f"    This will bypass the recycle bin and CANNOT be undone."
+        )
+        if not _confirm(
+            f"Permanently delete '{args.path}'? This cannot be undone.",
+            assume_yes=assume_yes,
+        ):
+            print("[-] Delete cancelled.")
+            return
+    else:
+        if not _confirm(
+            f"Move '{args.path}' to the Weiyun recycle bin?",
+            assume_yes=assume_yes,
+        ):
+            print("[-] Delete cancelled.")
+            return
+
     print(f"[*] {action} {args.path}")
     result = client.delete_file(args.path, permanent=permanent)
     if result["success"]:
@@ -166,6 +216,12 @@ def cmd_delete(client: WeiyunClient, args) -> None:
 
 def cmd_move(client: WeiyunClient, args) -> None:
     """Handle 'move' command."""
+    if not _confirm(
+        f"Move '{args.source}' to '{args.target}' on Weiyun?",
+        assume_yes=getattr(args, "yes", False),
+    ):
+        print("[-] Move cancelled.")
+        return
     print(f"[*] Moving {args.source} -> {args.target}")
     result = client.move_file(args.source, args.target)
     if result["success"]:
@@ -177,6 +233,12 @@ def cmd_move(client: WeiyunClient, args) -> None:
 
 def cmd_copy(client: WeiyunClient, args) -> None:
     """Handle 'copy' command."""
+    if not _confirm(
+        f"Copy '{args.source}' to '{args.target}' on Weiyun?",
+        assume_yes=getattr(args, "yes", False),
+    ):
+        print("[-] Copy cancelled.")
+        return
     print(f"[*] Copying {args.source} -> {args.target}")
     result = client.copy_file(args.source, args.target)
     if result["success"]:
@@ -188,6 +250,12 @@ def cmd_copy(client: WeiyunClient, args) -> None:
 
 def cmd_rename(client: WeiyunClient, args) -> None:
     """Handle 'rename' command."""
+    if not _confirm(
+        f"Rename '{args.path}' to '{args.name}' on Weiyun?",
+        assume_yes=getattr(args, "yes", False),
+    ):
+        print("[-] Rename cancelled.")
+        return
     print(f"[*] Renaming {args.path} -> {args.name}")
     result = client.rename_file(args.path, args.name)
     if result["success"]:
@@ -230,11 +298,37 @@ def cmd_search(client: WeiyunClient, args) -> None:
 
 def cmd_share(client: WeiyunClient, args) -> None:
     """Handle 'share' command."""
+    expire = getattr(args, "expire", 0)
+    password = getattr(args, "password", None)
+    assume_yes = getattr(args, "yes", False)
+
+    # Creating a share link can expose private files to anyone on the
+    # internet, so always surface the full parameters and require an
+    # explicit confirmation before calling the Weiyun API.
+    expire_desc = f"{expire} day(s)" if expire else "NEVER (permanent link)"
+    pw_desc = "set" if password else "NONE (link is the only secret)"
+    print("[!] About to create a public share link with these settings:")
+    print(f"      File:       {args.path}")
+    print(f"      Expires in: {expire_desc}")
+    print(f"      Password:   {pw_desc}")
+    if not password or not expire:
+        print(
+            "      WARNING: Sharing without both a password and an "
+            "expiration makes the file reachable indefinitely by anyone "
+            "holding the URL."
+        )
+    if not _confirm(
+        f"Create share link for '{args.path}'?",
+        assume_yes=assume_yes,
+    ):
+        print("[-] Share cancelled.")
+        return
+
     print(f"[*] Creating share for: {args.path}")
     result = client.create_share(
         args.path,
-        expire_days=getattr(args, "expire", 0),
-        password=getattr(args, "password", None),
+        expire_days=expire,
+        password=password,
     )
     if result["success"]:
         d = result["data"]
@@ -250,6 +344,12 @@ def cmd_share(client: WeiyunClient, args) -> None:
 
 def cmd_unshare(client: WeiyunClient, args) -> None:
     """Handle 'unshare' command."""
+    if not _confirm(
+        f"Cancel share '{args.share_id}'?",
+        assume_yes=getattr(args, "yes", False),
+    ):
+        print("[-] Unshare cancelled.")
+        return
     result = client.cancel_share(args.share_id)
     if result["success"]:
         print(f"[✓] Share {args.share_id} cancelled")
@@ -344,9 +444,18 @@ def cmd_restore(client: WeiyunClient, args) -> None:
 
 def cmd_clear_recycle(client: WeiyunClient, args) -> None:
     """Handle 'clear-recycle' command."""
-    if not getattr(args, "confirm", False):
+    assume_yes = getattr(args, "yes", False)
+    if not getattr(args, "confirm", False) and not assume_yes:
         print("[!] This will permanently delete all files in recycle bin!")
         print("    Add --confirm flag to proceed.")
+        return
+
+    # Even with --confirm, prompt once more interactively (unless --yes).
+    if not _confirm(
+        "Permanently empty the Weiyun recycle bin? This cannot be undone.",
+        assume_yes=assume_yes,
+    ):
+        print("[-] Clear cancelled.")
         return
 
     result = client.clear_recycle_bin(confirm=True)
@@ -377,6 +486,14 @@ Examples:
     parser.add_argument(
         "--cookies", type=str, default=None,
         help="Cookies string (overrides cookies.json)"
+    )
+    parser.add_argument(
+        "-y", "--yes", action="store_true",
+        help=(
+            "Skip interactive confirmation prompts for destructive or "
+            "exposure-sensitive actions (delete, permanent-delete, move, "
+            "copy, rename, share, unshare, clear-recycle). Use with care."
+        )
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
