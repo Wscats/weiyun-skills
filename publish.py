@@ -42,8 +42,16 @@ from typing import List, Optional, Tuple
 
 # Files inside the skill folder that must NOT be pushed to ClawHub.
 # Paths are relative to the skill root. Add more entries here if needed.
+#
+# Rationale for each entry:
+#   - publish.py       : this helper script; irrelevant to end users.
+#   - cookies.json     : password-equivalent Weiyun session cookies. If a
+#                        maintainer happens to have logged in locally and
+#                        forgotten to delete the file, we must still never
+#                        ship it to ClawHub under any circumstances.
 IGNORED_RELATIVE_PATHS: Tuple[str, ...] = (
     "publish.py",
+    "cookies.json",
 )
 
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")

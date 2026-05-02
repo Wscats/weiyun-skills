@@ -2,7 +2,7 @@
 name: weiyun-management
 license: MIT
 metadata:
-  version: 1.0.6
+  version: 1.0.7
   source: https://github.com/enoyao/weiyun-skills
   homepage: https://github.com/enoyao/weiyun-skills
   install:
@@ -22,10 +22,28 @@ metadata:
         publicly sharing any file in that account.
       notes: >
         The skill persists Weiyun session cookies (uin / skey / p_skey /
-        pt4_token etc.) locally. Anyone who can read cookies.json can act on
-        the user's behalf until the cookies expire (~24h). Use a dedicated or
-        non-primary account when possible, keep cookies.json private, and
-        delete it when the skill is no longer needed.
+        pt4_token etc.) locally. Anyone who can read cookies.json can act
+        on the user's behalf until the cookies expire (~24h). Required
+        handling rules (these are rules, not suggestions):
+          (1) Use a dedicated or non-primary Weiyun account whenever
+              possible – do NOT log in with an account that also holds
+              other sensitive assets.
+          (2) cookies.json is already listed in .gitignore and in the
+              publish.py IGNORED_RELATIVE_PATHS allow-list, so it can
+              never be committed to git nor shipped to ClawHub. Keep it
+              that way; never move, copy or symlink cookies.json into a
+              synced / shared / backed-up folder (iCloud, OneDrive,
+              Dropbox, Git, Docker images, CI artifacts, log bundles,
+              chat uploads, etc.).
+          (3) An AI agent running this skill MUST NOT read, print, log,
+              screenshot, base64-encode, transmit or otherwise exfiltrate
+              the contents of cookies.json; it may only invoke the CLI
+              which consumes the file internally.
+          (4) Run `rm cookies.json` as soon as you are done with the
+              skill, or whenever you will not use it again within 24h.
+          (5) If you suspect leakage, immediately revoke the session by
+              logging out of Weiyun on all devices, then re-login to
+              invalidate the stolen cookies.
   capabilities:
     mutating:
       - upload_file
@@ -41,26 +59,72 @@ metadata:
       - create_share
       - cancel_share
     safeguards: >
-      Every CLI handler that mutates the user's Weiyun account or exposes
-      content externally routes through the same `_confirm()` gate before
-      any API call. This covers: upload, upload-folder, delete (including
-      --permanent), move, copy, rename, mkdir, restore, clear-recycle,
-      share and unshare. `_confirm()` requires an interactive y/yes reply
-      on a TTY; in non-TTY / agent contexts it fails closed unless the
-      user passes `--yes`. `clear-recycle` additionally requires
-      `--confirm`. `upload` / `upload-folder` print an extra warning when
-      `--overwrite` is on, because overwriting a remote file silently
-      destroys its previous contents.
+      Defense in depth – the skill enforces safety at three layers:
+
+      (Layer 1, CLI) Every handler that mutates the user's Weiyun account
+      or exposes content externally routes through the same `_confirm()`
+      gate before any API call. This covers: upload, upload-folder,
+      delete (including --permanent), move, copy, rename, mkdir, restore,
+      clear-recycle, share and unshare. `_confirm()` requires an
+      interactive y/yes reply on a TTY; in non-TTY / agent contexts it
+      fails closed unless the user passes `--yes`. `clear-recycle`
+      additionally requires `--confirm`. `upload` / `upload-folder` print
+      an extra warning when `--overwrite` is on, because overwriting a
+      remote file silently destroys its previous contents.
+
+      (Layer 2, agent use-policy – BINDING for any AI agent that loads
+      this skill) The CLI gates above are necessary but not sufficient,
+      because an agent could in principle be tricked into approving
+      operations in bulk. Therefore, when executing this skill an agent
+      MUST additionally obey all of the following rules:
+        (a) Per-action approval: each mutating or exposure command must
+            be initiated by an explicit, current user instruction that
+            names the exact target (e.g. "delete /foo/bar.txt"). The
+            agent must NOT chain or batch mutating commands on its own
+            initiative, and must NOT "clean up", "reorganise" or
+            "optimise" the user's Weiyun account unprompted.
+        (b) No silent --yes: the agent must NOT pass `--yes` (or any
+            other confirmation-bypassing flag) unless the user has, in
+            this same session, explicitly granted permission to bypass
+            the prompt for this specific operation. Blanket pre-approval
+            such as "always say yes" must be refused.
+        (c) No destructive retries: if a mutating command fails, the
+            agent must NOT automatically retry with escalated flags
+            (e.g. switch `delete` to `delete --permanent`, or add
+            `--overwrite` on retry) – it must surface the failure to the
+            user and ask.
+        (d) No exfiltration of credentials: the agent must NOT read,
+            print, log, transmit or otherwise surface the contents of
+            cookies.json, and must NOT include cookies.json in tarballs,
+            commits, uploads, screenshots or tool outputs.
+        (e) Scope discipline: the agent should only touch paths the user
+            mentioned. Operations at or near the Weiyun root (`/`) and
+            recursive folder operations require a second, explicit
+            confirmation from the user that names the root path.
+
+      (Layer 3, host) cookies.json is created with mode 0600, listed in
+      .gitignore, and explicitly excluded from the publish artifact by
+      publish.py (see IGNORED_RELATIVE_PATHS). The user is instructed to
+      keep it out of synced / backed-up folders and to `rm` it when done.
 description: >
-  This skill should be used when the user needs to manage Tencent Weiyun
-  cloud storage, including file upload/download, sharing, space management,
-  and account authentication via QR code scanning or cookies. It provides
-  a complete Python toolkit for automating Weiyun operations with CLI and
-  SDK support. Trigger phrases include "upload to weiyun", "download from
-  weiyun", "weiyun share", "weiyun space", "manage weiyun files",
-  "weiyun login", "scan QR code", "微云管理", "微云上传", "微云下载",
-  "微云分享", "微云空间", "扫码登录", "文件管理", "云存储管理",
-  "微云文件", "weiyun files", "cloud storage".
+  This skill should be used ONLY when the user explicitly asks to perform
+  a specific Tencent Weiyun cloud-storage operation – e.g. a named file
+  upload, download, share, rename, move, delete, or a targeted space /
+  recycle-bin query. It is NOT a general-purpose "manage my cloud drive"
+  agent: the skill holds password-equivalent session cookies and can
+  read, modify, delete or publicly share any file in the authenticated
+  account, so every mutating or exposure command must be tied to an
+  explicit, per-action user instruction (see `capabilities.safeguards`
+  for the binding agent use-policy). Typical in-scope user requests are
+  "upload FILE to weiyun", "download FILE from weiyun", "share FILE on
+  weiyun", "check my weiyun space", "login to weiyun", plus their
+  Chinese equivalents ("上传到微云", "从微云下载", "微云分享",
+  "微云空间", "扫码登录", etc.). Trigger phrases: "upload to weiyun",
+  "download from weiyun", "weiyun share", "weiyun space",
+  "manage weiyun files", "weiyun login", "scan QR code", "微云管理",
+  "微云上传", "微云下载", "微云分享", "微云空间", "扫码登录",
+  "文件管理", "云存储管理", "微云文件", "weiyun files",
+  "cloud storage".
 ---
 
 # SKILL.md — 腾讯微云管理 Skills 定义

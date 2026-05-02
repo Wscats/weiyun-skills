@@ -16,6 +16,12 @@
 3. **会把文件对外暴露的命令**（exposure）：`share`、`unshare`。
 4. **确认机制** — 上述命令在 CLI 中都要求交互式 `y/yes` 确认；在非 TTY / Agent 环境下默认**拒绝执行**，除非显式传入 `--yes`。`--permanent` 删除和 `clear-recycle` 额外打印不可逆警告。
 5. **仓库根目录下的 `upload_readme.py`** 只是一次性辅助脚本，默认 **不** 覆盖云端已有 `/README.md`，并需要交互确认；若需非交互运行请显式传 `--yes --overwrite`，或先用 `--dry-run` 预演。
+6. **AI Agent 使用契约**（如果你是通过 AI Agent 调用本 skill，以下规则对 Agent 生效）：
+   - **逐项授权**：每个 mutating / exposure 命令（`upload`、`delete`、`move`、`copy`、`rename`、`mkdir`、`restore`、`clear-recycle`、`share`、`unshare`、`upload-folder`）都必须由用户在**本次会话中**明确指名目标后再执行。Agent **不得**自行链式执行、批量执行、或以"整理/清理/优化"为由主动修改云端内容。
+   - **`--yes` 不得默认启用**：Agent 不得在未获得用户针对该次操作的显式授权时传入 `--yes`；用户的"以后都默认同意"这类概括性授权应被拒绝。
+   - **禁止失败升级**：命令失败时不得自动加上更具破坏性的标志重试（例如把 `delete` 换成 `delete --permanent`，或重试时补上 `--overwrite`）—— 必须把失败原样上报给用户。
+   - **凭据不可外泄**：Agent 不得读取、打印、截图、转存、上传或以任何方式外泄 `cookies.json` 的内容，也不得把它放进 tar 包、commit、截图、工具输出中。
+   - **操作域纪律**：对 Weiyun 根目录 `/` 附近的操作、以及递归的文件夹操作，必须让用户**第二次显式确认**并指名根路径。
 
 ---
 
