@@ -1,6 +1,50 @@
 ---
 name: weiyun-management
 license: MIT
+metadata:
+  version: 1.0.5
+  source: https://github.com/enoyao/weiyun-skills
+  homepage: https://github.com/enoyao/weiyun-skills
+  install:
+    type: instruction-only
+    requirements: "Python >= 3.8 and the packages pinned in requirements.txt (requests==2.31.0, qrcode==7.4.2, tabulate==0.9.0, optionally Pillow==10.3.0)"
+    spec: |
+      This skill is instruction-only: installation means cloning/unpacking the
+      repository and running `pip install -r requirements.txt`. No remote
+      installer is executed and no post-install hook runs on the host.
+  credentials:
+    - name: weiyun-session-cookies
+      kind: password-equivalent
+      stored_at: cookies.json (mode 0600, owner-read/write only)
+      scope: >
+        Full access to the authenticated user's Tencent Weiyun account,
+        including listing, uploading, downloading, modifying, deleting and
+        publicly sharing any file in that account.
+      notes: >
+        The skill persists Weiyun session cookies (uin / skey / p_skey /
+        pt4_token etc.) locally. Anyone who can read cookies.json can act on
+        the user's behalf until the cookies expire (~24h). Use a dedicated or
+        non-primary account when possible, keep cookies.json private, and
+        delete it when the skill is no longer needed.
+  capabilities:
+    mutating:
+      - upload_file
+      - upload_folder
+      - delete_file
+      - move_file
+      - copy_file
+      - rename_file
+      - create_folder
+      - restore_file
+      - clear_recycle_bin
+    exposure:
+      - create_share
+      - cancel_share
+    safeguards: >
+      All mutating and exposure-sensitive CLI commands require explicit
+      interactive confirmation. In non-TTY / agent contexts the confirmation
+      fails closed unless the user passes the `--yes` flag. `clear_recycle_bin`
+      additionally requires `--confirm`.
 description: >
   This skill should be used when the user needs to manage Tencent Weiyun
   cloud storage, including file upload/download, sharing, space management,
