@@ -83,10 +83,30 @@ def cmd_list(client: WeiyunClient, args) -> None:
 
 def cmd_upload(client: WeiyunClient, args) -> None:
     """Handle 'upload' command."""
+    overwrite = getattr(args, "overwrite", False)
+    assume_yes = getattr(args, "yes", False)
+
+    # Uploading mutates the user's Weiyun account. When --overwrite is on,
+    # an existing remote file will be REPLACED, which is effectively a
+    # silent destructive action, so we surface that explicitly before
+    # asking for confirmation.
+    if overwrite:
+        print(
+            f"[!] --overwrite is enabled. If a file already exists at "
+            f"{args.remote}, its contents will be REPLACED."
+        )
+    if not _confirm(
+        f"Upload '{args.local}' to Weiyun at '{args.remote}'"
+        f"{' (overwrite allowed)' if overwrite else ''}?",
+        assume_yes=assume_yes,
+    ):
+        print("[-] Upload cancelled.")
+        return
+
     print(f"[*] Uploading {args.local} -> {args.remote}")
     result = client.upload_file(
         args.local, args.remote,
-        overwrite=getattr(args, "overwrite", False)
+        overwrite=overwrite,
     )
     if result["success"]:
         d = result["data"]
@@ -100,10 +120,29 @@ def cmd_upload(client: WeiyunClient, args) -> None:
 def cmd_upload_folder(client: WeiyunClient, args) -> None:
     """Handle 'upload-folder' command."""
     remote = getattr(args, "remote", "/")
+    overwrite = getattr(args, "overwrite", False)
+    assume_yes = getattr(args, "yes", False)
+
+    # Bulk folder uploads can create and/or overwrite many files at once,
+    # so we gate the whole operation behind the same confirmation prompt
+    # the rest of the mutating commands use.
+    if overwrite:
+        print(
+            f"[!] --overwrite is enabled. Existing files under "
+            f"'{remote}' may be REPLACED in bulk."
+        )
+    if not _confirm(
+        f"Upload folder '{args.local}' to Weiyun at '{remote}'"
+        f"{' (overwrite allowed)' if overwrite else ''}?",
+        assume_yes=assume_yes,
+    ):
+        print("[-] Upload cancelled.")
+        return
+
     print(f"[*] Uploading folder '{args.local}' -> Weiyun:{remote}")
     result = client.upload_folder(
         args.local, remote,
-        overwrite=getattr(args, "overwrite", False)
+        overwrite=overwrite,
     )
     if result["success"]:
         d = result["data"]
@@ -267,6 +306,14 @@ def cmd_rename(client: WeiyunClient, args) -> None:
 
 def cmd_mkdir(client: WeiyunClient, args) -> None:
     """Handle 'mkdir' command."""
+    # mkdir is a mutating operation (it changes the remote directory tree),
+    # so it goes through the same confirmation gate as upload/delete/etc.
+    if not _confirm(
+        f"Create folder '{args.path}' on Weiyun?",
+        assume_yes=getattr(args, "yes", False),
+    ):
+        print("[-] Create cancelled.")
+        return
     print(f"[*] Creating folder: {args.path}")
     result = client.create_folder(args.path)
     if result["success"]:
