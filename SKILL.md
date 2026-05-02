@@ -41,10 +41,16 @@ metadata:
       - create_share
       - cancel_share
     safeguards: >
-      All mutating and exposure-sensitive CLI commands require explicit
-      interactive confirmation. In non-TTY / agent contexts the confirmation
-      fails closed unless the user passes the `--yes` flag. `clear_recycle_bin`
-      additionally requires `--confirm`.
+      Every CLI handler that mutates the user's Weiyun account or exposes
+      content externally routes through the same `_confirm()` gate before
+      any API call. This covers: upload, upload-folder, delete (including
+      --permanent), move, copy, rename, mkdir, restore, clear-recycle,
+      share and unshare. `_confirm()` requires an interactive y/yes reply
+      on a TTY; in non-TTY / agent contexts it fails closed unless the
+      user passes `--yes`. `clear-recycle` additionally requires
+      `--confirm`. `upload` / `upload-folder` print an extra warning when
+      `--overwrite` is on, because overwriting a remote file silently
+      destroys its previous contents.
 description: >
   This skill should be used when the user needs to manage Tencent Weiyun
   cloud storage, including file upload/download, sharing, space management,
